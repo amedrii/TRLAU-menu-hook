@@ -451,6 +451,7 @@ void Draw::DrawSignals(Level* level)
 {
 	auto terrain = level->terrain;
 	auto terrainGroup = terrain->signalTerrainGroup;
+	auto font = Font::GetMainFont();
 
 	// Make sure there is a signal mesh
 	if (!terrainGroup || !terrainGroup->mesh)
@@ -469,6 +470,21 @@ void Draw::DrawSignals(Level* level)
 		auto x = GetVertice(face->i0, mesh, &mesh->m_position);
 		auto y = GetVertice(face->i1, mesh, &mesh->m_position);
 		auto z = GetVertice(face->i2, mesh, &mesh->m_position);
+
+		// SignalFace::id is the stable level-local identifier needed to
+		// distinguish overlapping or nearby signal volumes.
+		auto labelPosition = x;
+		labelPosition += &y;
+		labelPosition += &z;
+		labelPosition /= 3;
+
+		TRANS_RotTransPersVectorf(&labelPosition, &labelPosition);
+
+		if (labelPosition.z > 16.f)
+		{
+			font->SetCursor(labelPosition.x, labelPosition.y);
+			font->PrintCentered("Signal %d", face->id);
+		}
 
 		// Draw the face
 		DrawTriangle(&x, &y, &z, RGBA(255, 0, 0, 10));

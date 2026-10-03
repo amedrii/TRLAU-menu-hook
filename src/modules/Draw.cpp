@@ -1,5 +1,6 @@
 #include <utility>
 #include <string>
+#include <cmath>
 #include <imgui.h>
 
 #include "Draw.h"
@@ -28,6 +29,72 @@ static inline cdc::Vector3 GetVertice(unsigned int vertice, Mesh* mesh, cdc::Vec
 {
 	if (mesh->m_vertexType == VERTEX_INT16) return GetVertice<MeshVertex16>(vertice, mesh, offset);
 	return GetVertice<MeshVertex32>(vertice, mesh, offset);
+}
+
+// Detect whether Lara's centre crossed a signal-mesh triangle this frame.
+// This is diagnostic-only: it identifies the signal face being crossed without
+// relying on an unverified engine-function hook.
+static bool SegmentIntersectsTriangle(
+	const cdc::Vector3& start,
+	const cdc::Vector3& end,
+	const cdc::Vector3& a,
+	const cdc::Vector3& b,
+	const cdc::Vector3& c,
+	float* distance
+	)
+{
+	const float directionX = end.x - start.x;
+	const float directionY = end.y - start.y;
+	const float directionZ = end.z - start.z;
+	const float edge1X = b.x - a.x;
+	const float edge1Y = b.y - a.y;
+	const float edge1Z = b.z - a.z;
+	const float edge2X = c.x - a.x;
+	const float edge2Y = c.y - a.y;
+	const float edge2Z = c.z - a.z;
+	const float pX = directionY * edge2Z - directionZ * edge2Y;
+	const float pY = directionZ * edge2X - directionX * edge2Z;
+	const float pZ = directionX * edge2Y - directionY * edge2X;
+	const float determinant = edge1X * pX + edge1Y * pY + edge1Z * pZ;
+
+	if (std::fabs(determinant) < 0.0001f)
+	{
+		return false;
+	}
+
+	const float inverseDeterminant = 1.0f / determinant;
+	const float startToAX = start.x - a.x;
+	const float startToAY = start.y - a.y;
+	const float startToAZ = start.z - a.z;
+	const float u = (startToAX * pX + startToAY * pY + startToAZ * pZ)
+		* inverseDeterminant;
+
+	if (u < 0.0f || u > 1.0f)
+	{
+		return false;
+	}
+
+	const float qX = startToAY * edge1Z - startToAZ * edge1Y;
+	const float qY = startToAZ * edge1X - startToAX * edge1Z;
+	const float qZ = startToAX * edge1Y - startToAY * edge1X;
+	const float v = (directionX * qX + directionY * qY + directionZ * qZ)
+		* inverseDeterminant;
+
+	if (v < 0.0f || u + v > 1.0f)
+	{
+		return false;
+	}
+
+	const float hitDistance = (edge2X * qX + edge2Y * qY + edge2Z * qZ)
+		* inverseDeterminant;
+
+	if (hitDistance < 0.0f || hitDistance > 1.0f)
+	{
+		return false;
+	}
+
+	*distance = hitDistance;
+	return true;
 }
 
 static std::pair<unsigned int, const char*> s_mudFlags[]
@@ -459,7 +526,27 @@ void Draw::DrawSignals(Level* level)
 		return;
 	}
 
+	auto player = Game::GetPlayerInstance();
+	if (player == nullptr)
+	{
+		return;
+	}
+
 	auto mesh = terrainGroup->mesh;
+	static Level* previousLevel = nullptr;
+	static cdc::Vector3 previousPlayerPosition{};
+	static bool hasPreviousPlayerPosition = false;
+	static int lastCrossedSignalId = -1;
+
+	if (previousLevel != level)
+	{
+		previousLevel = level;
+		hasPreviousPlayerPosition = false;
+		lastCrossedSignalId = -1;
+	}
+
+	int crossedSignalId = -1;
+	float firstHitDistance = 2.0f;
 
 	// Draw all mesh faces
 	for (int i = 0; i < mesh->m_numFaces; i++)
@@ -486,9 +573,37 @@ void Draw::DrawSignals(Level* level)
 			font->PrintCentered("Signal %d", face->id);
 		}
 
+		if (hasPreviousPlayerPosition)
+		{
+			float hitDistance = 0.0f;
+			if (SegmentIntersectsTriangle(
+					previousPlayerPosition,
+					player->position,
+					x,
+					y,
+					z,
+					&hitDistance
+					) && hitDistance < firstHitDistance)
+			{
+				firstHitDistance = hitDistance;
+				crossedSignalId = face->id;
+			}
+		}
+
 		// Draw the face
 		DrawTriangle(&x, &y, &z, RGBA(255, 0, 0, 10));
 	}
+
+	previousPlayerPosition = player->position;
+	hasPreviousPlayerPosition = true;
+
+	if (crossedSignalId >= 0)
+	{
+		lastCrossedSignalId = crossedSignalId;
+	}
+
+	font->SetCursor(10.0f, 30.0f);
+	font->Print("Last crossed signal: %d", lastCrossedSignalId);
 }
 
 void Draw::DrawTriggers()
